@@ -1,0 +1,278 @@
+-- ====================================================================
+-- Oracle ACL Connectivity Test Script
+-- Description: Interactive script to test if ACL is working from database
+-- Usage: Execute in SQL*Plus or Oracle SQL Developer
+-- Requirements: Database user with ACL privileges
+-- ====================================================================
+
+SET SERVEROUTPUT ON SIZE 1000000
+SET PAGESIZE 1000
+SET LINESIZE 200
+SET VERIFY OFF
+SET FEEDBACK ON
+WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK
+
+-- Clear screen and show header
+CLEAR SCREEN
+
+PROMPT ====================================================================
+PROMPT                 Oracle ACL Connectivity Test Script
+PROMPT ====================================================================
+PROMPT This script will test ACL connectivity from the database
+PROMPT Enter the required details when prompted
+PROMPT ====================================================================
+
+-- Variable declarations for user input
+DEFINE target_host = ''
+DEFINE target_port = ''
+DEFINE test_user = ''
+
+-- Collect required details
+PROMPT 
+ACCEPT target_host PROMPT 'Enter target hostname/IP to test (e.g., google.com or 192.168.1.100): '
+ACCEPT target_port PROMPT 'Enter target port to test (e.g., 80, 443, 1521): '
+ACCEPT test_user PROMPT 'Enter database user/principal to test with (or press ENTER for current user): '
+
+-- Set default user if not provided
+COLUMN current_user_name NEW_VALUE default_user
+SELECT USER as current_user_name FROM DUAL;
+
+-- Use current user if no user specified
+DEFINE actual_user = '&test_user'
+COLUMN actual_test_user NEW_VALUE actual_user
+SELECT CASE 
+    WHEN TRIM('&test_user') IS NULL OR TRIM('&test_user') = '' 
+    THEN '&default_user' 
+    ELSE UPPER(TRIM('&test_user')) 
+END as actual_test_user FROM DUAL;
+
+-- Display test parameters
+PROMPT 
+PROMPT ====================================================================
+PROMPT Test Parameters:
+PROMPT ====================================================================
+PROMPT Target Host: &target_host
+PROMPT Target Port: &target_port
+PROMPT Test User: &actual_user
+PROMPT ====================================================================
+
+-- Test ACL connectivity
+DECLARE
+    v_host VARCHAR2(200) := '&target_host';
+    v_port NUMBER := TO_NUMBER('&target_port');
+    v_user VARCHAR2(200) := '&actual_user';
+    v_conn UTL_TCP.CONNECTION;
+    v_result VARCHAR2(4000);
+    v_timeout NUMBER := 10; -- 10 seconds timeout
+    v_test_successful BOOLEAN := FALSE;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE('====================================================================');
+    DBMS_OUTPUT.PUT_LINE('                    ACL CONNECTIVITY TEST RESULTS');
+    DBMS_OUTPUT.PUT_LINE('====================================================================');
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Validate input parameters
+    IF v_host IS NULL OR TRIM(v_host) IS NULL THEN
+        RAISE_APPLICATION_ERROR(-20001, 'ERROR: Hostname cannot be empty!');
+    END IF;
+    
+    IF v_port < 1 OR v_port > 65535 THEN
+        RAISE_APPLICATION_ERROR(-20002, 'ERROR: Port must be between 1 and 65535!');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('Testing connectivity to ' || v_host || ':' || v_port || ' as user ' || v_user || '...');
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Test 1: Hostname Resolution
+    DBMS_OUTPUT.PUT_LINE('Test 1: DNS Resolution');
+    DBMS_OUTPUT.PUT_LINE('----------------------');
+    BEGIN
+        SELECT UTL_INADDR.GET_HOST_ADDRESS(v_host) INTO v_result FROM DUAL;
+        DBMS_OUTPUT.PUT_LINE('✓ SUCCESS: Hostname resolved successfully');
+        DBMS_OUTPUT.PUT_LINE('  ' || v_host || ' → ' || v_result);
+    EXCEPTION
+        WHEN OTHERS THEN
+            DBMS_OUTPUT.PUT_LINE('✗ FAILED: DNS resolution failed');
+            DBMS_OUTPUT.PUT_LINE('  Error: ' || SQLERRM);
+            DBMS_OUTPUT.PUT_LINE('  Possible causes:');
+            DBMS_OUTPUT.PUT_LINE('    - Hostname does not exist');
+            DBMS_OUTPUT.PUT_LINE('    - DNS server not accessible from database');
+            DBMS_OUTPUT.PUT_LINE('    - ACL resolve privilege not granted');
+            RAISE_APPLICATION_ERROR(-20003, 'DNS resolution failed - cannot proceed with connectivity test');
+    END;
+    
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Test 2: TCP Connectivity
+    DBMS_OUTPUT.PUT_LINE('Test 2: TCP Connection');
+    DBMS_OUTPUT.PUT_LINE('-----------------------');
+    BEGIN
+        -- Attempt TCP connection
+        v_conn := UTL_TCP.OPEN_CONNECTION(
+            remote_host => v_host,
+            remote_port => v_port,
+            tx_timeout  => v_timeout
+        );
+        
+        -- If we get here, connection was successful
+        UTL_TCP.CLOSE_CONNECTION(v_conn);
+        v_test_successful := TRUE;
+        
+        DBMS_OUTPUT.PUT_LINE('✓ SUCCESS: TCP connection established successfully');
+        DBMS_OUTPUT.PUT_LINE('  Connected to ' || v_host || ':' || v_port);
+        DBMS_OUTPUT.PUT_LINE('  Connection opened and closed cleanly');
+        
+    EXCEPTION
+        WHEN UTL_TCP.NETWORK_ACCESS_DENIED_EXCEPTION THEN
+            DBMS_OUTPUT.PUT_LINE('✗ FAILED: Network access denied');
+            DBMS_OUTPUT.PUT_LINE('  ERROR: ACL is NOT working or not properly configured');
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('  Troubleshooting steps:');
+            DBMS_OUTPUT.PUT_LINE('    1. Check if ACL exists for this host/port combination');
+            DBMS_OUTPUT.PUT_LINE('    2. Verify user ''' || v_user || ''' has connect privilege in ACL');
+            DBMS_OUTPUT.PUT_LINE('    3. Ensure ACL is assigned to correct host/port range');
+            DBMS_OUTPUT.PUT_LINE('    4. Check if executing as the correct database user');
+            DBMS_OUTPUT.PUT_LINE('    5. Wait a few minutes for ACL changes to take effect');
+            
+        WHEN UTL_TCP.NETWORK_ERROR_EXCEPTION THEN
+            DBMS_OUTPUT.PUT_LINE('✗ FAILED: Network connection error');
+            DBMS_OUTPUT.PUT_LINE('  ERROR: Cannot reach target host/port');
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('  Possible causes:');
+            DBMS_OUTPUT.PUT_LINE('    - Host ' || v_host || ' is not reachable from database server');
+            DBMS_OUTPUT.PUT_LINE('    - Port ' || v_port || ' is not open/listening on target host');
+            DBMS_OUTPUT.PUT_LINE('    - Network firewall blocking the connection');
+            DBMS_OUTPUT.PUT_LINE('    - Target service is down');
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('  Note: ACL may be working correctly, but target is unreachable');
+            
+        WHEN UTL_TCP.PARTIAL_MULTIBYTE_CHAR_EXCEPTION THEN
+            DBMS_OUTPUT.PUT_LINE('✗ FAILED: Character encoding error during connection');
+            DBMS_OUTPUT.PUT_LINE('  This usually indicates a protocol-level issue');
+            
+        WHEN OTHERS THEN
+            DBMS_OUTPUT.PUT_LINE('✗ FAILED: Unexpected error');
+            DBMS_OUTPUT.PUT_LINE('  Error Code: ' || SQLCODE);
+            DBMS_OUTPUT.PUT_LINE('  Error Message: ' || SQLERRM);
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('  Possible causes:');
+            DBMS_OUTPUT.PUT_LINE('    - Insufficient database privileges');
+            DBMS_OUTPUT.PUT_LINE('    - Database configuration issue');
+            DBMS_OUTPUT.PUT_LINE('    - Network infrastructure problem');
+    END;
+    
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Test 3: Check ACL Configuration (if accessible)
+    DBMS_OUTPUT.PUT_LINE('Test 3: ACL Configuration Check');
+    DBMS_OUTPUT.PUT_LINE('--------------------------------');
+    DECLARE
+        v_acl_count NUMBER := 0;
+        v_privilege_count NUMBER := 0;
+    BEGIN
+        -- Check if user has access to ACL views
+        BEGIN
+            SELECT COUNT(*) INTO v_acl_count 
+            FROM dba_network_acls 
+            WHERE UPPER(host) = UPPER(v_host) 
+            AND (lower_port IS NULL OR v_port >= lower_port)
+            AND (upper_port IS NULL OR v_port <= upper_port);
+            
+            SELECT COUNT(*) INTO v_privilege_count
+            FROM dba_network_acls a
+            JOIN dba_network_acl_privileges p ON a.acl = p.acl
+            WHERE UPPER(a.host) = UPPER(v_host)
+            AND (a.lower_port IS NULL OR v_port >= a.lower_port)
+            AND (a.upper_port IS NULL OR v_port <= a.upper_port)
+            AND UPPER(p.principal) = v_user
+            AND p.privilege = 'connect'
+            AND UPPER(p.is_grant) = 'TRUE';
+            
+            IF v_acl_count > 0 THEN
+                DBMS_OUTPUT.PUT_LINE('✓ Found ' || v_acl_count || ' ACL(s) for host ' || v_host || ':' || v_port);
+                
+                IF v_privilege_count > 0 THEN
+                    DBMS_OUTPUT.PUT_LINE('✓ User ' || v_user || ' has connect privilege in ACL');
+                ELSE
+                    DBMS_OUTPUT.PUT_LINE('✗ User ' || v_user || ' does NOT have connect privilege in ACL');
+                END IF;
+                
+                -- Show ACL details
+                DBMS_OUTPUT.PUT_LINE('');
+                DBMS_OUTPUT.PUT_LINE('ACL Details:');
+                FOR acl_rec IN (
+                    SELECT a.acl, a.host, a.lower_port, a.upper_port,
+                           p.principal, p.privilege, p.is_grant
+                    FROM dba_network_acls a
+                    JOIN dba_network_acl_privileges p ON a.acl = p.acl
+                    WHERE UPPER(a.host) = UPPER(v_host)
+                    AND (a.lower_port IS NULL OR v_port >= a.lower_port)
+                    AND (a.upper_port IS NULL OR v_port <= a.upper_port)
+                    ORDER BY a.acl, p.principal, p.privilege
+                ) LOOP
+                    DBMS_OUTPUT.PUT_LINE('  ACL: ' || acl_rec.acl);
+                    DBMS_OUTPUT.PUT_LINE('  Host: ' || acl_rec.host);
+                    DBMS_OUTPUT.PUT_LINE('  Port Range: ' || 
+                        NVL(TO_CHAR(acl_rec.lower_port), 'ALL') || '-' || 
+                        NVL(TO_CHAR(acl_rec.upper_port), 'ALL'));
+                    DBMS_OUTPUT.PUT_LINE('  Principal: ' || acl_rec.principal);
+                    DBMS_OUTPUT.PUT_LINE('  Privilege: ' || acl_rec.privilege);
+                    DBMS_OUTPUT.PUT_LINE('  Granted: ' || acl_rec.is_grant);
+                    DBMS_OUTPUT.PUT_LINE('  ----------------------------------------');
+                END LOOP;
+            ELSE
+                DBMS_OUTPUT.PUT_LINE('✗ No ACLs found for host ' || v_host || ':' || v_port);
+                DBMS_OUTPUT.PUT_LINE('  This explains why connectivity failed');
+            END IF;
+            
+        EXCEPTION
+            WHEN OTHERS THEN
+                DBMS_OUTPUT.PUT_LINE('⚠ Cannot access ACL configuration views');
+                DBMS_OUTPUT.PUT_LINE('  Error: ' || SQLERRM);
+                DBMS_OUTPUT.PUT_LINE('  This may be due to insufficient privileges');
+                DBMS_OUTPUT.PUT_LINE('  Contact DBA to check ACL configuration');
+        END;
+    END;
+    
+    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE('====================================================================');
+    DBMS_OUTPUT.PUT_LINE('                           TEST SUMMARY');
+    DBMS_OUTPUT.PUT_LINE('====================================================================');
+    
+    IF v_test_successful THEN
+        DBMS_OUTPUT.PUT_LINE('🎉 OVERALL RESULT: ACL IS WORKING CORRECTLY');
+        DBMS_OUTPUT.PUT_LINE('   User ''' || v_user || ''' can successfully connect to ' || v_host || ':' || v_port);
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('❌ OVERALL RESULT: ACL IS NOT WORKING');
+        DBMS_OUTPUT.PUT_LINE('   User ''' || v_user || ''' cannot connect to ' || v_host || ':' || v_port);
+        DBMS_OUTPUT.PUT_LINE('   Review the detailed error messages above for troubleshooting');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('====================================================================');
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('FATAL ERROR during ACL test:');
+        DBMS_OUTPUT.PUT_LINE('Error Code: ' || SQLCODE);
+        DBMS_OUTPUT.PUT_LINE('Error Message: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('');
+        RAISE;
+END;
+/
+
+-- Clean up variables
+UNDEFINE target_host
+UNDEFINE target_port
+UNDEFINE test_user
+UNDEFINE actual_user
+UNDEFINE default_user
+
+-- Reset SQL*Plus settings
+SET VERIFY ON
+SET FEEDBACK ON
+
+PROMPT 
+PROMPT ACL connectivity test completed.
+PROMPT
