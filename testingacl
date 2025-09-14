@@ -1,0 +1,46 @@
+SET SERVEROUTPUT ON;
+
+DECLARE
+    v_host VARCHAR2(200);
+    v_port NUMBER;
+    v_principal VARCHAR2(200) := TRIM(UPPER('&principal')); -- Prompt for principal
+    v_count NUMBER;
+    conn UTL_TCP.CONNECTION;
+BEGIN
+    -- Prompt for hostname and port number
+    v_host := TRIM(REGEXP_REPLACE('&host_name', '[[:space:]''"]', '')); -- Remove spaces, quotes
+    v_port := TO_NUMBER(TRIM('&port_number')); -- Prompt for port number
+
+    -- Verify ACL existence
+    SELECT COUNT(*) INTO v_count 
+    FROM dba_network_acl_privileges 
+    WHERE principal = v_principal 
+    AND privilege = 'connect';
+
+    IF v_count >= 1 THEN
+        DBMS_OUTPUT.PUT_LINE('✓ ACL verification passed: Connect privilege granted for ' || v_principal);
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('⚠ Warning: Connect privilege not found for ' || v_principal);
+    END IF;
+
+    -- Test connectivity using UTL_TCP
+    BEGIN
+        DBMS_OUTPUT.PUT_LINE('Testing connectivity to ' || v_host || ':' || v_port);
+        conn := UTL_TCP.OPEN_CONNECTION(
+            remote_host => v_host,
+            remote_port => v_port,
+            tx_timeout => 5 -- Timeout in seconds
+        );
+        UTL_TCP.CLOSE_CONNECTION(conn);
+        DBMS_OUTPUT.PUT_LINE('✓ Connection test successful: ACL allows access to ' || v_host || ':' || v_port);
+    EXCEPTION
+        WHEN OTHERS THEN
+            DBMS_OUTPUT.PUT_LINE('✗ Connection test failed: ' || SQLERRM);
+            IF SQLCODE = -24247 THEN
+                DBMS_OUTPUT.PUT_LINE('✗ ACL is blocking access (ORA-24247). Check ACL configuration.');
+            ELSE
+                DBMS_OUTPUT.PUT_LINE('✗ Other error (e.g., no server listening), but ACL allows the attempt.');
+            END IF;
+    END;
+END;
+/
