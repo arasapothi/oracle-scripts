@@ -1,0 +1,528 @@
+-- ====================================================================
+-- Oracle ACL (Access Control List) Management Script
+-- Description: Interactive script for managing Oracle Database ACLs
+-- Features: Step-by-step confirmation, input validation, connectivity testing
+-- Requirements: Oracle 11g+, DBA privileges, DBMS_NETWORK_ACL_ADMIN access
+-- ====================================================================
+
+SET SERVEROUTPUT ON SIZE 1000000
+SET PAGESIZE 1000
+SET LINESIZE 200
+SET VERIFY OFF
+SET FEEDBACK ON
+
+-- Exit cleanly on any SQL error to prevent continuation after RAISE_APPLICATION_ERROR
+WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK
+
+-- Clear screen and show header
+CLEAR SCREEN
+
+PROMPT ====================================================================
+PROMPT                   Oracle ACL Management Script
+PROMPT ====================================================================
+PROMPT This script will help you manage Oracle Database Access Control Lists
+PROMPT Each step requires your confirmation to proceed
+PROMPT ====================================================================
+
+-- Variable declarations for user input
+DEFINE acl_name = ''
+DEFINE host_name = ''
+DEFINE principal = ''
+DEFINE lower_port = ''
+DEFINE upper_port = ''
+DEFINE continue_step = ''
+
+-- ====================================================================
+-- STEP 1: Display all existing ACLs in the database
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 1: Displaying all existing ACLs in the database
+PROMPT ====================================================================
+
+PROMPT Existing ACL Assignments (Host/Port mappings):
+SELECT 
+    acl,
+    host,
+    lower_port,
+    upper_port
+FROM dba_network_acls
+ORDER BY acl, host, lower_port;
+
+PROMPT 
+PROMPT Existing ACL Privileges (Principal permissions):
+SELECT 
+    acl,
+    principal,
+    privilege,
+    is_grant,
+    to_char(start_date, 'DD-MON-YYYY HH24:MI:SS') as start_date,
+    to_char(end_date, 'DD-MON-YYYY HH24:MI:SS') as end_date
+FROM dba_network_acl_privileges
+ORDER BY acl, principal, privilege;
+
+PROMPT 
+PROMPT Current ACL count:
+SELECT COUNT(DISTINCT acl) as "Total ACLs" FROM dba_network_acls;
+
+PROMPT 
+PROMPT Step 1 completed: All existing ACLs have been displayed above.
+ACCEPT continue_step PROMPT 'Do you want to proceed to Step 2? (Y/N): '
+
+-- Validate user input for continuation
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        DBMS_OUTPUT.PUT_LINE('Script terminated by user at Step 1.');
+        RAISE_APPLICATION_ERROR(-20100, 'Script execution terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 2: Show ACL privileges for users and ACL names
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 2: Displaying ACL privileges for users and ACL names
+PROMPT ====================================================================
+
+SELECT 
+    p.acl,
+    p.principal,
+    p.privilege,
+    p.is_grant,
+    a.host,
+    a.lower_port,
+    a.upper_port
+FROM dba_network_acl_privileges p
+JOIN dba_network_acls a ON p.acl = a.acl
+ORDER BY p.acl, p.principal, p.privilege;
+
+PROMPT 
+PROMPT Privilege summary:
+SELECT 
+    privilege,
+    COUNT(*) as "Count",
+    COUNT(CASE WHEN UPPER(is_grant) = 'TRUE' THEN 1 END) as "Granted",
+    COUNT(CASE WHEN UPPER(is_grant) = 'FALSE' THEN 1 END) as "Denied"
+FROM dba_network_acl_privileges 
+GROUP BY privilege
+ORDER BY privilege;
+
+PROMPT 
+PROMPT Step 2 completed: ACL privileges have been displayed above.
+ACCEPT continue_step PROMPT 'Do you want to proceed to Step 3? (Y/N): '
+
+-- Validate user input for continuation
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        DBMS_OUTPUT.PUT_LINE('Script terminated by user at Step 2.');
+        RAISE_APPLICATION_ERROR(-20101, 'Script execution terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 3: Interactive prompts for ACL parameters with input validation
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 3: Collecting ACL parameters with validation
+PROMPT ====================================================================
+
+-- Collect ACL Name
+ACCEPT acl_name PROMPT 'Enter ACL Name (e.g., my_acl.xml): '
+
+-- Validate ACL name format
+DECLARE
+    v_acl_name VARCHAR2(200) := '&acl_name';
+BEGIN
+    -- Check if ACL name is empty
+    IF v_acl_name IS NULL OR TRIM(v_acl_name) IS NULL THEN
+        RAISE_APPLICATION_ERROR(-20001, 'ERROR: ACL name cannot be empty!');
+    END IF;
+    
+    -- Check if ACL name ends with .xml
+    IF NOT REGEXP_LIKE(UPPER(v_acl_name), '\.XML$') THEN
+        RAISE_APPLICATION_ERROR(-20002, 'ERROR: ACL name must end with .xml extension!');
+    END IF;
+    
+    -- Check for valid characters (alphanumeric, underscore, dash, dot)
+    IF NOT REGEXP_LIKE(v_acl_name, '^[a-zA-Z0-9_.-]+$') THEN
+        RAISE_APPLICATION_ERROR(-20003, 'ERROR: ACL name contains invalid characters! Use only letters, numbers, underscore, dash, and dot.');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('✓ ACL name validation passed: ' || v_acl_name);
+END;
+/
+
+-- Collect Hostname
+ACCEPT host_name PROMPT 'Enter Hostname/IP (e.g., example.com or 192.168.1.100): '
+
+-- Validate hostname
+DECLARE
+    v_host_name VARCHAR2(200) := '&host_name';
+BEGIN
+    -- Check if hostname is empty
+    IF v_host_name IS NULL OR TRIM(v_host_name) IS NULL THEN
+        RAISE_APPLICATION_ERROR(-20004, 'ERROR: Hostname cannot be empty!');
+    END IF;
+    
+    -- Basic hostname/IP validation
+    IF NOT (REGEXP_LIKE(v_host_name, '^[a-zA-Z0-9.-]+$') OR 
+            REGEXP_LIKE(v_host_name, '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')) THEN
+        RAISE_APPLICATION_ERROR(-20005, 'ERROR: Invalid hostname format!');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('✓ Hostname validation passed: ' || v_host_name);
+END;
+/
+
+-- Collect Principal (user/schema)
+ACCEPT principal PROMPT 'Enter Principal/User (e.g., SCOTT or HR_USER): '
+
+-- Validate principal
+DECLARE
+    v_principal VARCHAR2(200) := UPPER('&principal');
+BEGIN
+    -- Check if principal is empty
+    IF v_principal IS NULL OR TRIM(v_principal) IS NULL THEN
+        RAISE_APPLICATION_ERROR(-20006, 'ERROR: Principal cannot be empty!');
+    END IF;
+    
+    -- Check if principal exists in database
+    DECLARE
+        v_count NUMBER;
+    BEGIN
+        SELECT COUNT(*) INTO v_count FROM dba_users WHERE username = v_principal;
+        IF v_count = 0 THEN
+            DBMS_OUTPUT.PUT_LINE('WARNING: User ' || v_principal || ' does not exist in database!');
+            DBMS_OUTPUT.PUT_LINE('Please ensure this user exists before proceeding.');
+        ELSE
+            DBMS_OUTPUT.PUT_LINE('✓ Principal validation passed: ' || v_principal || ' exists in database');
+        END IF;
+    END;
+END;
+/
+
+-- Collect Lower Port
+ACCEPT lower_port PROMPT 'Enter Lower Port (e.g., 80): '
+
+-- Validate lower port
+DECLARE
+    v_lower_port NUMBER := TO_NUMBER('&lower_port');
+BEGIN
+    IF v_lower_port < 1 OR v_lower_port > 65535 THEN
+        RAISE_APPLICATION_ERROR(-20007, 'ERROR: Lower port must be between 1 and 65535!');
+    END IF;
+    DBMS_OUTPUT.PUT_LINE('✓ Lower port validation passed: ' || v_lower_port);
+EXCEPTION
+    WHEN VALUE_ERROR THEN
+        RAISE_APPLICATION_ERROR(-20008, 'ERROR: Lower port must be a valid number!');
+END;
+/
+
+-- Collect Upper Port
+ACCEPT upper_port PROMPT 'Enter Upper Port (e.g., 443): '
+
+-- Validate upper port and range
+DECLARE
+    v_upper_port NUMBER := TO_NUMBER('&upper_port');
+    v_lower_port NUMBER := TO_NUMBER('&lower_port');
+BEGIN
+    IF v_upper_port < 1 OR v_upper_port > 65535 THEN
+        RAISE_APPLICATION_ERROR(-20009, 'ERROR: Upper port must be between 1 and 65535!');
+    END IF;
+    
+    IF v_upper_port < v_lower_port THEN
+        RAISE_APPLICATION_ERROR(-20010, 'ERROR: Upper port must be greater than or equal to lower port!');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('✓ Upper port validation passed: ' || v_upper_port);
+    DBMS_OUTPUT.PUT_LINE('✓ Port range validation passed: ' || v_lower_port || '-' || v_upper_port);
+EXCEPTION
+    WHEN VALUE_ERROR THEN
+        RAISE_APPLICATION_ERROR(-20011, 'ERROR: Upper port must be a valid number!');
+END;
+/
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT Input Summary:
+PROMPT ====================================================================
+PROMPT ACL Name: &acl_name
+PROMPT Hostname: &host_name  
+PROMPT Principal: &principal
+PROMPT Port Range: &lower_port - &upper_port
+PROMPT ====================================================================
+
+PROMPT 
+PROMPT Step 3 completed: All input parameters collected and validated.
+ACCEPT continue_step PROMPT 'Do you want to proceed to Step 4? (Y/N): '
+
+-- Validate user input for continuation
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        DBMS_OUTPUT.PUT_LINE('Script terminated by user at Step 3.');
+        RAISE_APPLICATION_ERROR(-20102, 'Script execution terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 4: Validate ACL name uniqueness and throw error if exists
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 4: Validating ACL name uniqueness
+PROMPT ====================================================================
+
+DECLARE
+    v_acl_count NUMBER;
+    v_acl_name VARCHAR2(200) := '&acl_name';
+BEGIN
+    -- Check if ACL already exists
+    SELECT COUNT(*) INTO v_acl_count 
+    FROM dba_network_acls 
+    WHERE UPPER(acl) = UPPER('/sys/acls/' || v_acl_name);
+    
+    IF v_acl_count > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('ERROR: ACL "' || v_acl_name || '" already exists in the database!');
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('Existing ACL details:');
+        FOR acl_rec IN (SELECT acl, principal, privilege, is_grant, host, lower_port, upper_port
+                       FROM dba_network_acls a 
+                       JOIN dba_network_acl_privileges p ON a.acl = p.acl
+                       WHERE UPPER(a.acl) = UPPER('/sys/acls/' || v_acl_name)) LOOP
+            DBMS_OUTPUT.PUT_LINE('  ACL: ' || acl_rec.acl);
+            DBMS_OUTPUT.PUT_LINE('  Principal: ' || acl_rec.principal);
+            DBMS_OUTPUT.PUT_LINE('  Privilege: ' || acl_rec.privilege);
+            DBMS_OUTPUT.PUT_LINE('  Is Grant: ' || acl_rec.is_grant);
+            DBMS_OUTPUT.PUT_LINE('  Host: ' || acl_rec.host);
+            DBMS_OUTPUT.PUT_LINE('  Port Range: ' || acl_rec.lower_port || '-' || acl_rec.upper_port);
+            DBMS_OUTPUT.PUT_LINE('  ----------------------------------------');
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('');
+        RAISE_APPLICATION_ERROR(-20012, 'Cannot proceed: ACL name already exists. Please choose a different ACL name.');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('✓ ACL name uniqueness validated: "' || v_acl_name || '" is available');
+    END IF;
+END;
+/
+
+PROMPT 
+PROMPT Step 4 completed: ACL name uniqueness validated successfully.
+ACCEPT continue_step PROMPT 'Do you want to proceed to Step 5 (ACL Creation)? (Y/N): '
+
+-- Validate user input for continuation
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        DBMS_OUTPUT.PUT_LINE('Script terminated by user at Step 4.');
+        RAISE_APPLICATION_ERROR(-20103, 'Script execution terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 5: Create ACL using DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 5: Creating ACL using DBMS_NETWORK_ACL_ADMIN
+PROMPT ====================================================================
+
+DECLARE
+    v_acl_name VARCHAR2(200) := '&acl_name';
+    v_host_name VARCHAR2(200) := '&host_name';
+    v_principal VARCHAR2(200) := UPPER('&principal');
+    v_lower_port NUMBER := TO_NUMBER('&lower_port');
+    v_upper_port NUMBER := TO_NUMBER('&upper_port');
+    v_version VARCHAR2(100);
+    v_version_num NUMBER;
+    v_use_append_host_ace BOOLEAN := FALSE;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('Creating ACL with the following parameters:');
+    DBMS_OUTPUT.PUT_LINE('  ACL Name: ' || v_acl_name);
+    DBMS_OUTPUT.PUT_LINE('  Hostname: ' || v_host_name);
+    DBMS_OUTPUT.PUT_LINE('  Principal: ' || v_principal);
+    DBMS_OUTPUT.PUT_LINE('  Port Range: ' || v_lower_port || '-' || v_upper_port);
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Detect Oracle version to determine which method to use
+    SELECT version INTO v_version FROM v$instance;
+    v_version_num := TO_NUMBER(SUBSTR(v_version, 1, INSTR(v_version, '.') - 1));
+    
+    DBMS_OUTPUT.PUT_LINE('Detected Oracle Version: ' || v_version);
+    
+    -- Use APPEND_HOST_ACE for Oracle 12c and later, fallback to CREATE_ACL for 11g
+    IF v_version_num >= 12 THEN
+        v_use_append_host_ace := TRUE;
+        DBMS_OUTPUT.PUT_LINE('Using APPEND_HOST_ACE method (Oracle 12c+ detected)');
+    ELSE
+        v_use_append_host_ace := FALSE;
+        DBMS_OUTPUT.PUT_LINE('Using CREATE_ACL method (Oracle 11g detected)');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Create ACL and assign privileges
+    BEGIN
+        IF v_use_append_host_ace THEN
+            -- Oracle 12c+ method: Use APPEND_HOST_ACE
+            DBMS_OUTPUT.PUT_LINE('Creating ACL using APPEND_HOST_ACE method...');
+            
+            -- Add connect privilege
+            DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+                host        => v_host_name,
+                lower_port  => v_lower_port,
+                upper_port  => v_upper_port,
+                ace         => xs$ace_type(
+                    privilege_list => xs$name_list('connect'),
+                    principal_name => v_principal,
+                    principal_type => xs_acl.ptype_db
+                )
+            );
+            DBMS_OUTPUT.PUT_LINE('✓ Connect privilege added successfully using APPEND_HOST_ACE');
+            
+            -- Add resolve privilege  
+            DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+                host        => v_host_name,
+                lower_port  => v_lower_port,
+                upper_port  => v_upper_port,
+                ace         => xs$ace_type(
+                    privilege_list => xs$name_list('resolve'),
+                    principal_name => v_principal,
+                    principal_type => xs_acl.ptype_db
+                )
+            );
+            DBMS_OUTPUT.PUT_LINE('✓ Resolve privilege added successfully using APPEND_HOST_ACE');
+            
+        ELSE
+            -- Oracle 11g fallback method: Use CREATE_ACL/ADD_PRIVILEGE/ASSIGN_ACL
+            DBMS_OUTPUT.PUT_LINE('Creating ACL using CREATE_ACL method...');
+            
+            -- Create the ACL
+            DBMS_NETWORK_ACL_ADMIN.CREATE_ACL(
+                acl          => v_acl_name,
+                description  => 'ACL for ' || v_principal || ' to access ' || v_host_name || ':' || v_lower_port || '-' || v_upper_port,
+                principal    => v_principal,
+                is_grant     => TRUE,
+                privilege    => 'connect'
+            );
+            DBMS_OUTPUT.PUT_LINE('✓ ACL created successfully');
+            
+            -- Add resolve privilege
+            DBMS_NETWORK_ACL_ADMIN.ADD_PRIVILEGE(
+                acl       => v_acl_name,
+                principal => v_principal,
+                is_grant  => TRUE,
+                privilege => 'resolve'
+            );
+            DBMS_OUTPUT.PUT_LINE('✓ Resolve privilege added successfully');
+            
+            -- Assign ACL to host
+            DBMS_NETWORK_ACL_ADMIN.ASSIGN_ACL(
+                acl        => v_acl_name,
+                host       => v_host_name,
+                lower_port => v_lower_port,
+                upper_port => v_upper_port
+            );
+            DBMS_OUTPUT.PUT_LINE('✓ ACL assigned to host successfully');
+            
+        END IF;
+        
+        -- Commit the changes
+        COMMIT;
+        DBMS_OUTPUT.PUT_LINE('✓ All changes committed successfully');
+        
+    EXCEPTION
+        WHEN OTHERS THEN
+            ROLLBACK;
+            DBMS_OUTPUT.PUT_LINE('ERROR occurred during ACL creation:');
+            DBMS_OUTPUT.PUT_LINE('Error Code: ' || SQLCODE);
+            DBMS_OUTPUT.PUT_LINE('Error Message: ' || SQLERRM);
+            DBMS_OUTPUT.PUT_LINE('');
+            DBMS_OUTPUT.PUT_LINE('Possible causes:');
+            DBMS_OUTPUT.PUT_LINE('  - Insufficient privileges (need EXECUTE on DBMS_NETWORK_ACL_ADMIN)');
+            DBMS_OUTPUT.PUT_LINE('  - Principal user does not exist in database');
+            DBMS_OUTPUT.PUT_LINE('  - Network ACL feature not enabled');
+            DBMS_OUTPUT.PUT_LINE('  - XS$ACE_TYPE or XS$NAME_LIST not available (Oracle 11g)');
+            DBMS_OUTPUT.PUT_LINE('All changes have been rolled back.');
+            RAISE;
+    END;
+END;
+/
+
+PROMPT 
+PROMPT Step 5 completed: ACL created and assigned successfully.
+ACCEPT continue_step PROMPT 'Do you want to proceed to Step 6 (Verification and Testing)? (Y/N): '
+
+-- Validate user input for continuation
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        DBMS_OUTPUT.PUT_LINE('Script completed. ACL has been created successfully.');
+        RAISE_APPLICATION_ERROR(-20104, 'Script execution completed by user request.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 6: Verify ACL creation and test connectivity with error reporting
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 6: Verifying ACL creation and testing connectivity
+PROMPT ====================================================================
+
+-- Verify ACL Creation
+DECLARE
+    v_acl_name VARCHAR2(200) := '&acl_name';
+    v_host_name VARCHAR2(200) := '&host_name';
+    v_principal VARCHAR2(200) := UPPER('&principal');
+    v_lower_port NUMBER := TO_NUMBER('&lower_port');
+    v_upper_port NUMBER := TO_NUMBER('&upper_port');
+    v_count NUMBER;
+    v_version VARCHAR2(100);
+    v_version_num NUMBER;
+    v_use_append_host_ace BOOLEAN := FALSE;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('Verifying ACL creation...');
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Detect Oracle version to determine which verification method to use
+    SELECT version INTO v_version FROM v$instance;
+    v_version_num := TO_NUMBER(SUBSTR(v_version, 1, INSTR(v_version, '.') - 1));
+    
+    DBMS_OUTPUT.PUT_LINE('Detected Oracle Version: ' || v_version);
+    
+    -- Use different verification approaches based on Oracle version
+    IF v_version_num >= 12 THEN
+        v_use_append_host_ace := TRUE;
+        DBMS_OUTPUT.PUT_LINE('Using 12c+ verification method (APPEND_HOST_ACE creates system-generated ACL names)');
+    ELSE
+        v_use_append_host_ace := FALSE;
+        DBMS_OUTPUT.PUT_LINE('Using 11g verification method (CREATE_ACL uses user-specified ACL names)');
+    END IF;
+    
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    IF v_use_append_host_ace THEN
+        -- Oracle 12c+ verification: Check by host/port/principal combination
+        -- APPEND_HOST_ACE creates system-generated AC
