@@ -291,3 +291,119 @@ UNDEFINE continue_step
 -- Reset settings
 SET VERIFY ON
 SET FEEDBACK ON
+
+
+
+output
+
+
+====================================================================
+Oracle 19c ACL Management Script (SYSDBA)
+====================================================================
+Simple 6-step process for ACL creation and testing
+====================================================================
+
+====================================================================
+STEP 1: Current ACL Host/Port Assignments
+====================================================================
+
+HOST                                                         LOWER_PORT UPPER_PORT ENTRIES
+------------------------------------------------------------ ---------- ---------- -------
+*                                                                                        1
+
+1 row selected.
+
+
+Total host/port combinations:
+
+Total Assignments
+-----------------
+                1
+
+1 row selected.
+
+
+Continue to Step 2? (Y/N): Y
+
+PL/SQL procedure successfully completed.
+
+
+====================================================================
+STEP 2: Current Principal/Privilege Summary
+====================================================================
+
+PRINCIPAL                      PRIVILEGE    IS_GR ENTRIES
+------------------------------ ------------ ----- -------
+GSMADMIN_INTERNAL              resolve      true        1
+
+1 row selected.
+
+
+Total privilege assignments:
+
+Total Privileges
+----------------
+               1
+
+1 row selected.
+
+
+Continue to Step 3? (Y/N): Y
+
+PL/SQL procedure successfully completed.
+
+
+====================================================================
+STEP 3: Enter ACL Parameters
+====================================================================
+Enter ACL name for logging (e.g., my_test_acl): test
+Enter hostname/IP (e.g., google.com or 8.8.8.8): smtp.de.bosch.com
+Enter database user/principal (e.g., HR): TEST
+Enter lower port (e.g., 80, 443, 1521): 443
+Enter upper port (same as lower for single port, e.g., 80, 443, 1521): 443
+??? Creating ACL with your exact input
+Host: smtp.de.bosch.com
+Principal: TEST
+Port Range: 443-443
+
+PL/SQL procedure successfully completed.
+
+
+Continue to Step 4? (Y/N): Y
+
+PL/SQL procedure successfully completed.
+
+
+====================================================================
+STEP 4: Checking existing ACL for host/port
+====================================================================
+??? Proceeding with ACL creation using your input
+Host: smtp.de.bosch.com
+Principal: TEST
+Port Range: 443-443
+
+PL/SQL procedure successfully completed.
+
+
+Continue to Step 5 (Create/Update ACL)? (Y/N): Y
+
+PL/SQL procedure successfully completed.
+
+
+====================================================================
+STEP 5: Creating/Updating ACL using APPEND_HOST_ACE
+====================================================================
+Creating ACL with your exact input:
+Host: "smtp.de.bosch.com"
+Port Range: 443-443
+Principal: TEST
+??? ERROR: ORA-24244: invalid host or port for access control list (ACL) assignment
+??? All changes rolled back
+DECLARE
+*
+ERROR at line 1:
+ORA-24244: invalid host or port for access control list (ACL) assignment
+ORA-06512: at line 36
+ORA-06512: at "SYS.DBMS_NETWORK_ACL_ADMIN", line 1132
+ORA-06512: at line 14
+
