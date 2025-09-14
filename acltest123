@@ -1,0 +1,18 @@
+BEGIN
+  DECLARE
+    conn UTL_TCP.CONNECTION;
+  BEGIN
+    -- Attempt to open a connection to the specified host and port
+    conn := UTL_TCP.OPEN_CONNECTION('&v_hostname', &v_lower_port);
+    UTL_TCP.CLOSE_CONNECTION(conn);
+    DBMS_OUTPUT.PUT_LINE('Connection test successful: ACL allows access.');
+  EXCEPTION
+    WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('Connection test failed: ' || SQLERRM);
+      IF SQLCODE = -24247 THEN
+        DBMS_OUTPUT.PUT_LINE('ACL is blocking access (ORA-24247).');
+      ELSE
+        DBMS_OUTPUT.PUT_LINE('Other error (e.g., no server listening), but ACL allows the attempt.');
+      END IF;
+  END;
+END;
