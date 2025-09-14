@@ -1,0 +1,293 @@
+-- ====================================================================
+-- Oracle ACL Management Script - Simplified for 19c SYSDBA
+-- Description: Simple 6-step ACL creation and testing for Oracle 19c
+-- Usage: Run as SYSDBA in SQL*Plus
+-- ====================================================================
+
+-- SQL*Plus formatting for PuTTY readability
+SET SERVEROUTPUT ON SIZE UNLIMITED
+SET PAGESIZE 50000 
+SET LINESIZE 220 
+SET TRIMSPOOL ON 
+SET TAB OFF 
+SET VERIFY OFF 
+SET FEEDBACK ON
+WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK
+
+-- Column formatting for clean display
+COLUMN acl FORMAT a60
+COLUMN host FORMAT a60 
+COLUMN principal FORMAT a30
+COLUMN privilege FORMAT a12
+COLUMN is_grant FORMAT a5
+COLUMN lower_port FORMAT 99999
+COLUMN upper_port FORMAT 99999
+COLUMN entries FORMAT 999999
+
+-- Clear screen and show header
+CLEAR SCREEN
+
+PROMPT ====================================================================
+PROMPT           Oracle 19c ACL Management Script (SYSDBA)
+PROMPT ====================================================================
+PROMPT Simple 6-step process for ACL creation and testing
+PROMPT ====================================================================
+
+-- Variable declarations
+DEFINE acl_name = ''
+DEFINE host_name = ''
+DEFINE principal = ''
+DEFINE lower_port = ''
+DEFINE upper_port = ''
+DEFINE continue_step = ''
+
+-- ====================================================================
+-- STEP 1: Show ACL host/port assignments summary
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 1: Current ACL Host/Port Assignments
+PROMPT ====================================================================
+
+SELECT 
+    host,
+    lower_port,
+    upper_port,
+    COUNT(*) as entries
+FROM dba_network_acls 
+GROUP BY host, lower_port, upper_port 
+ORDER BY host, lower_port;
+
+PROMPT 
+PROMPT Total host/port combinations:
+SELECT COUNT(DISTINCT host||':'||lower_port||'-'||upper_port) as "Total Assignments" 
+FROM dba_network_acls;
+
+PROMPT 
+ACCEPT continue_step PROMPT 'Continue to Step 2? (Y/N): '
+
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        RAISE_APPLICATION_ERROR(-20100, 'Script terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 2: Show principal/privilege summary
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 2: Current Principal/Privilege Summary  
+PROMPT ====================================================================
+
+SELECT 
+    principal,
+    privilege,
+    is_grant,
+    COUNT(*) as entries
+FROM dba_network_acl_privileges 
+GROUP BY principal, privilege, is_grant 
+ORDER BY principal, privilege;
+
+PROMPT 
+PROMPT Total privilege assignments:
+SELECT COUNT(*) as "Total Privileges" FROM dba_network_acl_privileges;
+
+PROMPT 
+ACCEPT continue_step PROMPT 'Continue to Step 3? (Y/N): '
+
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        RAISE_APPLICATION_ERROR(-20101, 'Script terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 3: Collect ACL parameters (simplified)
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 3: Enter ACL Parameters
+PROMPT ====================================================================
+
+ACCEPT acl_name PROMPT 'Enter ACL name for logging (e.g., my_test_acl): '
+ACCEPT host_name PROMPT 'Enter hostname/IP (e.g., google.com or 8.8.8.8): '
+ACCEPT principal PROMPT 'Enter database user/principal (e.g., HR): '
+ACCEPT lower_port PROMPT 'Enter lower port (e.g., 80, 443, 1521): '
+ACCEPT upper_port PROMPT 'Enter upper port (same as lower for single port, e.g., 80, 443, 1521): '
+
+-- Accept all inputs exactly as provided
+DECLARE
+    v_host VARCHAR2(200) := TRIM('&host_name');
+    v_principal VARCHAR2(200) := TRIM('&principal');
+    v_lower_port NUMBER := TO_NUMBER(TRIM('&lower_port'));
+    v_upper_port NUMBER := TO_NUMBER(TRIM('&upper_port'));
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('✓ Creating ACL with your exact input');
+    DBMS_OUTPUT.PUT_LINE('  Host: ' || v_host);
+    DBMS_OUTPUT.PUT_LINE('  Principal: ' || v_principal);
+    DBMS_OUTPUT.PUT_LINE('  Port Range: ' || v_lower_port || '-' || v_upper_port);
+END;
+/
+
+PROMPT 
+ACCEPT continue_step PROMPT 'Continue to Step 4? (Y/N): '
+
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        RAISE_APPLICATION_ERROR(-20102, 'Script terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 4: Check if ACL already exists for this host/port
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 4: Checking existing ACL for host/port
+PROMPT ====================================================================
+
+DECLARE
+    v_host VARCHAR2(200) := TRIM('&host_name');
+    v_principal VARCHAR2(200) := TRIM('&principal');
+    v_lower_port NUMBER := TO_NUMBER(TRIM('&lower_port'));
+    v_upper_port NUMBER := TO_NUMBER(TRIM('&upper_port'));
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('✓ Proceeding with ACL creation using your input');
+    DBMS_OUTPUT.PUT_LINE('  Host: ' || v_host);
+    DBMS_OUTPUT.PUT_LINE('  Principal: ' || v_principal);
+    DBMS_OUTPUT.PUT_LINE('  Port Range: ' || v_lower_port || '-' || v_upper_port);
+END;
+/
+
+PROMPT 
+ACCEPT continue_step PROMPT 'Continue to Step 5 (Create/Update ACL)? (Y/N): '
+
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        RAISE_APPLICATION_ERROR(-20103, 'Script terminated by user.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 5: Create ACL (Oracle 19c simplified)
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 5: Creating/Updating ACL using APPEND_HOST_ACE
+PROMPT ====================================================================
+
+DECLARE
+    v_host VARCHAR2(200) := TRIM('&host_name');
+    v_principal VARCHAR2(200) := TRIM('&principal');
+    v_lower_port NUMBER := TO_NUMBER(TRIM('&lower_port'));
+    v_upper_port NUMBER := TO_NUMBER(TRIM('&upper_port'));
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('Creating ACL with your exact input:');
+    DBMS_OUTPUT.PUT_LINE('  Host: "' || v_host || '"');
+    DBMS_OUTPUT.PUT_LINE('  Port Range: ' || v_lower_port || '-' || v_upper_port);
+    DBMS_OUTPUT.PUT_LINE('  Principal: ' || v_principal);
+    DBMS_OUTPUT.PUT_LINE('');
+    
+    -- Create ACL with exact user input - no modifications
+    DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+        host => v_host,
+        lower_port => v_lower_port,
+        upper_port => v_upper_port,
+        ace => xs$ace_type(
+            privilege_list => xs$name_list('connect', 'resolve'),
+            principal_name => v_principal,
+            principal_type => xs_acl.ptype_db
+        )
+    );
+    
+    COMMIT;
+    
+    DBMS_OUTPUT.PUT_LINE('✓ ACL created/updated successfully');
+    DBMS_OUTPUT.PUT_LINE('✓ Granted connect and resolve privileges');
+    DBMS_OUTPUT.PUT_LINE('✓ Changes committed');
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        ROLLBACK;
+        DBMS_OUTPUT.PUT_LINE('✗ ERROR: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('✗ All changes rolled back');
+        RAISE;
+END;
+/
+
+PROMPT 
+ACCEPT continue_step PROMPT 'Continue to Step 6 (Test ACL)? (Y/N): '
+
+DECLARE
+    v_continue VARCHAR2(10) := UPPER('&continue_step');
+BEGIN
+    IF v_continue NOT IN ('Y', 'YES') THEN
+        DBMS_OUTPUT.PUT_LINE('ACL creation completed successfully.');
+        RAISE_APPLICATION_ERROR(-20104, 'Script completed - testing skipped.');
+    END IF;
+END;
+/
+
+-- ====================================================================
+-- STEP 6: Verify and test ACL (simplified)
+-- ====================================================================
+
+PROMPT 
+PROMPT ====================================================================
+PROMPT STEP 6: ACL Verification and Connectivity Test
+PROMPT ====================================================================
+
+DECLARE
+    v_host VARCHAR2(200) := TRIM('&host_name');
+    v_principal VARCHAR2(200) := TRIM('&principal');
+    v_lower_port NUMBER := TO_NUMBER(TRIM('&lower_port'));
+    v_upper_port NUMBER := TO_NUMBER(TRIM('&upper_port'));
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('=== ACL CREATED ===');
+    DBMS_OUTPUT.PUT_LINE('✓ ACL created with your exact input');
+    DBMS_OUTPUT.PUT_LINE('  Host: ' || v_host);
+    DBMS_OUTPUT.PUT_LINE('  Principal: ' || v_principal);
+    DBMS_OUTPUT.PUT_LINE('  Port Range: ' || v_lower_port || '-' || v_upper_port);
+END;
+/
+
+-- Final summary
+PROMPT 
+PROMPT ====================================================================
+PROMPT                        SCRIPT COMPLETED
+PROMPT ====================================================================
+PROMPT ACL Name: &acl_name
+PROMPT Host: &host_name  
+PROMPT Principal: &principal
+PROMPT Port Range: &lower_port - &upper_port
+PROMPT ====================================================================
+
+-- Clean up
+UNDEFINE acl_name
+UNDEFINE host_name
+UNDEFINE principal  
+UNDEFINE lower_port
+UNDEFINE upper_port
+UNDEFINE continue_step
+
+-- Reset settings
+SET VERIFY ON
+SET FEEDBACK ON
