@@ -473,3 +473,25 @@ UNDEFINE continue_step
 -- Reset settings
 SET VERIFY ON
 SET FEEDBACK ON
+
+
+
+QL> BEGIN
+    DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+        host => 'stmp.de.bosch.com',
+
+lower_port => 443,
+
+upper_port => 443,
+
+        ace => xs$ace_type(privilege_list => xs$name_list('connect'),
+                           principal_name => 'test',
+                           principal_type => xs_acl.ptype_db));
+
+    COMMIT;
+
+END;
+/  2    3    4    5    6    7    8    9   10   11   12   13   14   15   16
+
+PL/SQL procedure successfully completed.
+
