@@ -354,3 +354,22 @@ UNDEFINE continue_step
 -- Reset settings
 SET VERIFY ON
 SET FEEDBACK ON
+
+
+
+BEGIN
+    DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(
+        host => 'smtp.de.bosch.com',
+
+lower_port => 443,
+
+upper_port => 443,
+
+        ace => xs$ace_type(privilege_list => xs$name_list('connect'),
+                           principal_name => 'test',
+                           principal_type => xs_acl.ptype_db));
+
+    COMMIT;
+
+END;
+/
