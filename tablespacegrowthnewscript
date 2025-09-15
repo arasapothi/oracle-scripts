@@ -439,3 +439,272 @@ then '******DATA PURGED' end variance
 from t e, t b
 where e.run_time = b.run_time + 1
 order by 1;
+
+
+
+
+
+-- Oracle Tablespace Historical Growth Analysis Script
+-- Displays historical used space growth for a tablespace over the last 30 days
+-- Uses DBA_HIST_TBSPC_SPACE_USAGE for historical data (based on user-provided query)
+-- Requires Oracle Database with AWR enabled
+
+SET PAGESIZE 1000
+SET LINESIZE 150
+SET ECHO OFF
+SET FEEDBACK OFF
+SET VERIFY OFF
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+
+-- Prompt for tablespace name
+ACCEPT tablespace_name CHAR PROMPT 'Enter Tablespace Name: '
+
+-- Clear screen and show header
+CLEAR SCREEN
+
+PROMPT ================================================================================
+PROMPT                    TABLESPACE HISTORICAL GROWTH ANALYSIS
+PROMPT ================================================================================
+PROMPT
+
+-- Validate tablespace exists
+SET SERVEROUTPUT ON
+DECLARE
+    v_count NUMBER;
+    v_ts_name VARCHAR2(30) := UPPER('&tablespace_name');
+BEGIN
+    SELECT COUNT(*) INTO v_count 
+    FROM dba_tablespaces 
+    WHERE UPPER(tablespace_name) = v_ts_name;
+    
+    IF v_count = 0 THEN
+        DBMS_OUTPUT.PUT_LINE('ERROR: Tablespace "' || v_ts_name || '" does not exist!');
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('Available tablespaces:');
+        FOR ts_rec IN (SELECT tablespace_name FROM dba_tablespaces ORDER BY tablespace_name) LOOP
+            DBMS_OUTPUT.PUT_LINE('  - ' || ts_rec.tablespace_name);
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('');
+        DBMS_OUTPUT.PUT_LINE('Please re-run the script with a valid tablespace name.');
+        RAISE_APPLICATION_ERROR(-20001, 'Invalid tablespace name: ' || v_ts_name);
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Tablespace "' || v_ts_name || '" found. Proceeding with analysis...');
+        DBMS_OUTPUT.PUT_LINE('');
+    END IF;
+END;
+/
+
+-- Display tablespace basic information
+PROMPT Current Tablespace Information:
+PROMPT --------------------------------
+
+SELECT 
+    ts.tablespace_name,
+    ts.status,
+    ts.contents,
+    ts.extent_management,
+    ts.allocation_type,
+    ts.segment_space_management
+FROM dba_tablespaces ts
+WHERE UPPER(ts.tablespace_name) = UPPER('&tablespace_name');
+
+PROMPT
+
+-- Display current size and usage
+PROMPT Current Size and Usage:
+PROMPT -----------------------
+
+SELECT 
+    df.tablespace_name,
+    ROUND(SUM(df.bytes)/1024/1024/1024, 2) AS "Total Size (GB)",
+    ROUND(SUM(df.bytes - NVL(fs.bytes, 0))/1024/1024/1024, 2) AS "Used Size (GB)",
+    ROUND(SUM(NVL(fs.bytes, 0))/1024/1024/1024, 2) AS "Free Size (GB)",
+    ROUND((SUM(df.bytes - NVL(fs.bytes, 0)) / SUM(df.bytes)) * 100, 2) AS "Used %"
+FROM 
+    (SELECT tablespace_name, SUM(bytes) bytes 
+     FROM dba_data_files 
+     WHERE UPPER(tablespace_name) = UPPER('&tablespace_name')
+     GROUP BY tablespace_name) df,
+    (SELECT tablespace_name, SUM(bytes) bytes 
+     FROM dba_free_space 
+     WHERE UPPER(tablespace_name) = UPPER('&tablespace_name')
+     GROUP BY tablespace_name) fs
+WHERE df.tablespace_name = fs.tablespace_name(+)
+GROUP BY df.tablespace_name;
+
+PROMPT
+
+-- Check AWR availability and show message
+DECLARE
+    v_awr_enabled VARCHAR2(10);
+    v_ts_name VARCHAR2(30) := UPPER('&tablespace_name');
+BEGIN
+    -- Check if AWR is enabled
+    SELECT value INTO v_awr_enabled 
+    FROM v$parameter 
+    WHERE name = 'statistics_level';
+    
+    IF v_awr_enabled != 'TYPICAL' AND v_awr_enabled != 'ALL' THEN
+        DBMS_OUTPUT.PUT_LINE('INFO: AWR is not enabled (statistics_level = ' || v_awr_enabled || ')');
+        DBMS_OUTPUT.PUT_LINE('Historical analysis requires AWR to be enabled.');
+        DBMS_OUTPUT.PUT_LINE('Current information will be displayed only.');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('AWR is enabled. Attempting historical analysis...');
+    END IF;
+    DBMS_OUTPUT.PUT_LINE('');
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        DBMS_OUTPUT.PUT_LINE('INFO: Cannot determine AWR status. Proceeding with analysis...');
+        DBMS_OUTPUT.PUT_LINE('');
+END;
+/
+
+-- Display historical used space growth from AWR (based on user-provided query)
+PROMPT Historical Used Space Growth (Last 30 Days):
+PROMPT ============================================
+PROMPT Note: Shows allocated and used space trends based on AWR data from DBA_HIST_TBSPC_SPACE_USAGE.
+
+WITH t AS (
+    SELECT 
+        ss.run_time,
+        ts.name AS tablespace_name,
+        ROUND(su.tablespace_size * dt.block_size / 1024 / 1024 / 1024, 2) AS alloc_size_gb,
+        ROUND(su.tablespace_usedsize * dt.block_size / 1024 / 1024 / 1024, 2) AS used_size_gb
+    FROM 
+        dba_hist_tbspc_space_usage su,
+        (SELECT TRUNC(begin_interval_time) run_time, MAX(snap_id) snap_id 
+         FROM dba_hist_snapshot 
+         WHERE begin_interval_time >= SYSDATE - 30
+         GROUP BY TRUNC(begin_interval_time)) ss,
+        v$tablespace ts,
+        dba_tablespaces dt
+    WHERE 
+        su.snap_id = ss.snap_id
+        AND su.tablespace_id = ts.ts#
+        AND ts.name = UPPER('&tablespace_name')
+        AND ts.name = dt.tablespace_name
+)
+SELECT 
+    TO_CHAR(e.run_time, 'YYYY-MM-DD') AS "Snapshot Date",
+    e.tablespace_name AS "Tablespace",
+    e.alloc_size_gb AS "Allocated Size (GB)",
+    e.used_size_gb AS "Current Used Size (GB)",
+    NVL(b.used_size_gb, 0) AS "Previous Used Size (GB)",
+    CASE 
+        WHEN e.used_size_gb > NVL(b.used_size_gb, 0) THEN ROUND(e.used_size_gb - b.used_size_gb, 2) || ' GB'
+        WHEN e.used_size_gb = NVL(b.used_size_gb, 0) THEN '***NO DATA GROWTH'
+        WHEN e.used_size_gb < NVL(b.used_size_gb, 0) THEN '******DATA PURGED'
+    END AS "Variance",
+    ROUND(e.used_size_gb / e.alloc_size_gb * 100, 2) AS "Used %"
+FROM t e
+LEFT OUTER JOIN t b ON e.run_time = b.run_time + 1
+ORDER BY e.run_time DESC;
+
+PROMPT
+
+-- Growth summary and recommendations
+PROMPT Growth Summary and Recommendations:
+PROMPT ===================================
+
+WITH usage AS (
+    SELECT 
+        ROUND((SUM(df.bytes - NVL(fs.bytes, 0)) / SUM(df.bytes)) * 100, 2) AS used_pct,
+        ROUND(SUM(df.bytes - NVL(fs.bytes, 0)) / 1024 / 1024 / 1024, 2) AS used_gb,
+        ROUND(SUM(df.bytes) / 1024 / 1024 / 1024, 2) AS total_gb
+    FROM 
+        (SELECT SUM(bytes) AS bytes FROM dba_data_files WHERE UPPER(tablespace_name) = UPPER('&tablespace_name')) df,
+        (SELECT SUM(bytes) AS bytes FROM dba_free_space WHERE UPPER(tablespace_name) = UPPER('&tablespace_name')) fs
+),
+growth_trend AS (
+    SELECT 
+        AVG(CASE 
+                WHEN e.used_size_gb > NVL(b.used_size_gb, 0) THEN (e.used_size_gb - NVL(b.used_size_gb, 0)) * 1024 
+                ELSE 0 
+            END) AS avg_daily_growth_mb
+    FROM (
+        SELECT 
+            ss.run_time,
+            ROUND(su.tablespace_usedsize * dt.block_size / 1024 / 1024 / 1024, 2) AS used_size_gb
+        FROM 
+            dba_hist_tbspc_space_usage su,
+            (SELECT TRUNC(begin_interval_time) run_time, MAX(snap_id) snap_id 
+             FROM dba_hist_snapshot 
+             WHERE begin_interval_time >= SYSDATE - 30
+             GROUP BY TRUNC(begin_interval_time)) ss,
+            v$tablespace ts,
+            dba_tablespaces dt
+        WHERE 
+            su.snap_id = ss.snap_id
+            AND su.tablespace_id = ts.ts#
+            AND ts.name = UPPER('&tablespace_name')
+            AND ts.name = dt.tablespace_name
+    ) e
+    LEFT OUTER JOIN (
+        SELECT 
+            ss.run_time,
+            ROUND(su.tablespace_usedsize * dt.block_size / 1024 / 1024 / 1024, 2) AS used_size_gb
+        FROM 
+            dba_hist_tbspc_space_usage su,
+            (SELECT TRUNC(begin_interval_time) run_time, MAX(snap_id) snap_id 
+             FROM dba_hist_snapshot 
+             WHERE begin_interval_time >= SYSDATE - 30
+             GROUP BY TRUNC(begin_interval_time)) ss,
+            v$tablespace ts,
+            dba_tablespaces dt
+        WHERE 
+            su.snap_id = ss.snap_id
+            AND su.tablespace_id = ts.ts#
+            AND ts.name = UPPER('&tablespace_name')
+            AND ts.name = dt.tablespace_name
+    ) b ON e.run_time = b.run_time + 1
+)
+SELECT 
+    '&tablespace_name' AS "Tablespace Name",
+    CASE 
+        WHEN u.used_pct > 85 THEN 'HIGH USAGE - Consider adding datafiles or extending existing ones'
+        WHEN u.used_pct > 70 THEN 'MODERATE USAGE - Monitor growth closely and plan for expansion'
+        ELSE 'NORMAL USAGE - Tablespace usage is within normal parameters'
+    END AS "Usage Status",
+    CASE 
+        WHEN g.avg_daily_growth_mb IS NULL THEN 'No historical growth data available'
+        WHEN g.avg_daily_growth_mb > 100 THEN 'Rapid growth detected: ~' || ROUND(g.avg_daily_growth_mb, 2) || ' MB/day. Plan for additional space.'
+        WHEN g.avg_daily_growth_mb > 10 THEN 'Moderate growth: ~' || ROUND(g.avg_daily_growth_mb, 2) || ' MB/day. Monitor regularly.'
+        ELSE 'Low growth: ~' || ROUND(g.avg_daily_growth_mb, 2) || ' MB/day. No immediate action needed.'
+    END AS "Growth Trend",
+    TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI') AS "Analysis Date",
+    ROUND(u.used_pct, 2) || '%' AS "Current Usage %",
+    ROUND(u.used_gb, 2) || ' GB' AS "Current Used Space",
+    ROUND(u.total_gb, 2) || ' GB' AS "Current Total Space"
+FROM usage u, growth_trend g;
+
+PROMPT
+
+-- Data files information
+PROMPT Tablespace Data Files:
+PROMPT =====================
+
+SELECT 
+    file_name AS "File Name",
+    ROUND(bytes/1024/1024, 2) AS "Size (MB)",
+    ROUND(maxbytes/1024/1024, 2) AS "Max Size (MB)",
+    autoextensible AS "Auto Extend",
+    ROUND(increment_by * (SELECT value FROM v$parameter WHERE name = 'db_block_size')/1024/1024, 2) AS "Increment (MB)",
+    status AS "Status"
+FROM dba_data_files
+WHERE UPPER(tablespace_name) = UPPER('&tablespace_name')
+ORDER BY file_id;
+
+PROMPT
+PROMPT ================================================================================
+PROMPT                            ANALYSIS COMPLETE
+PROMPT ================================================================================
+
+-- Reset settings
+SET PAGESIZE 14
+SET LINESIZE 80
+SET ECHO ON
+SET FEEDBACK ON
+SET VERIFY ON
+
+-- Clear variables
+UNDEFINE tablespace_name
