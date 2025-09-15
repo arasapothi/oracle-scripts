@@ -1,0 +1,62 @@
+SET SERVEROUTPUT ON;
+SET LINESIZE 200;
+SET PAGESIZE 50;
+
+ACCEPT tablespace_name PROMPT 'Enter Tablespace Name: ';
+
+COLUMN tablespace_name FORMAT A30;
+COLUMN total_size_mb FORMAT 999,999,999.99;
+COLUMN used_size_mb FORMAT 999,999,999.99;
+COLUMN free_size_mb FORMAT 999,999,999.99;
+COLUMN pct_used FORMAT 999.99;
+
+SELECT 
+    ts.tablespace_name,
+    ROUND(ts.total_size / 1024 / 1024, 2) AS total_size_mb,
+    ROUND((ts.total_size - fs.free_space) / 1024 / 1024, 2) AS used_size_mb,
+    ROUND(fs.free_space / 1024 / 1024, 2) AS free_size_mb,
+    ROUND(((ts.total_size - fs.free_space) / ts.total_size) * 100, 2) AS pct_used
+FROM (
+    SELECT tablespace_name, SUM(bytes) AS total_size
+    FROM dba_data_files
+    WHERE tablespace_name = UPPER('&tablespace_name')
+    GROUP BY tablespace_name
+) ts
+LEFT JOIN (
+    SELECT tablespace_name, SUM(bytes) AS free_space
+    FROM dba_free_space
+    WHERE tablespace_name = UPPER('&tablespace_name')
+    GROUP BY tablespace_name
+) fs
+ON ts.tablespace_name = fs.tablespace_name
+WHERE ts.tablespace_name IS NOT NULL;
+
+-- Optional: Display historical growth (if you have a history table)
+-- Assumes a table named TABLESPACE_GROWTH_HIST exists with columns: tablespace_name, check_date, size_mb
+DECLARE
+    v_ts_name VARCHAR2(30) := UPPER('&tablespace_name');
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('Historical Growth for Tablespace: ' || v_ts_name);
+    DBMS_OUTPUT.PUT_LINE('---------------------------------------------');
+    FOR rec IN (
+        SELECT check_date, size_mb
+        FROM TABLESPACE_GROWTH_HIST
+        WHERE tablespace_name = v_ts_name
+        ORDER BY check_date DESC
+    ) LOOP
+        DBMS_OUTPUT.PUT_LINE('Date: ' || TO_CHAR(rec.check_date, 'YYYY-MM-DD HH24:MI:SS') || ' | Size (MB): ' || rec.size_mb);
+    END LOOP;
+END;
+/
+
+-- Optional: Display tablespace attributes
+SELECT 
+    tablespace_name,
+    status,
+    contents,
+    logging,
+    extent_management,
+    allocation_type,
+    segment_space_management
+FROM dba_tablespaces
+WHERE tablespace_name = UPPER('&tablespace_name');
