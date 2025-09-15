@@ -1,0 +1,304 @@
+-- ================================================================
+-- Oracle Scheduler Jobs Analysis Script
+-- Comprehensive analysis of scheduler jobs and wait events
+-- ================================================================
+
+-- Set output formatting
+SET PAGESIZE 1000
+SET LINESIZE 200
+COLUMN job_name FORMAT A30
+COLUMN job_class FORMAT A20
+COLUMN state FORMAT A15
+COLUMN schedule_name FORMAT A20
+COLUMN last_start_date FORMAT A25
+COLUMN next_run_date FORMAT A25
+COLUMN failure_count FORMAT 999
+COLUMN run_duration FORMAT A15
+
+PROMPT
+PROMPT ================================================================
+PROMPT 1. CURRENT SCHEDULER JOBS STATUS AND STATE
+PROMPT ================================================================
+
+SELECT 
+    job_name,
+    job_class,
+    state,
+    schedule_name,
+    last_start_date,
+    next_run_date,
+    failure_count,
+    run_count,
+    last_run_duration
+FROM dba_scheduler_jobs
+ORDER BY state, job_name;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 2. CURRENTLY RUNNING SCHEDULER JOBS
+PROMPT ================================================================
+
+SELECT 
+    j.job_name,
+    j.state,
+    r.session_id,
+    r.slave_process_id,
+    r.running_instance,
+    r.resource_consumer_group,
+    r.elapsed_time,
+    r.cpu_used
+FROM dba_scheduler_jobs j
+JOIN dba_scheduler_running_jobs r ON j.job_name = r.job_name
+WHERE j.state = 'RUNNING'
+ORDER BY r.elapsed_time DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 3. FAILED JOBS WITH ERROR DETAILS
+PROMPT ================================================================
+
+SELECT 
+    job_name,
+    status,
+    error#,
+    run_duration,
+    log_date,
+    SUBSTR(additional_info, 1, 100) as error_details
+FROM dba_scheduler_job_run_details
+WHERE status = 'FAILED'
+    AND log_date >= SYSDATE - 7  -- Last 7 days
+ORDER BY log_date DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 4. JOB EXECUTION HISTORY AND PERFORMANCE (Last 7 Days)
+PROMPT ================================================================
+
+SELECT 
+    job_name,
+    status,
+    log_date,
+    run_duration,
+    cpu_used
+FROM dba_scheduler_job_run_details
+WHERE log_date >= SYSDATE - 7
+ORDER BY job_name, log_date DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 5. WAIT EVENTS FOR CURRENTLY RUNNING SCHEDULER JOBS
+PROMPT ================================================================
+
+SELECT 
+    rj.job_name,
+    s.sid,
+    s.serial#,
+    s.username,
+    s.status,
+    s.wait_class,
+    s.event,
+    s.state,
+    s.wait_time_micro/1000000 as wait_seconds,
+    s.seconds_in_wait,
+    s.p1text,
+    s.p1,
+    s.p2text,
+    s.p2,
+    s.p3text,
+    s.p3
+FROM dba_scheduler_running_jobs rj
+JOIN v$session s ON rj.session_id = s.sid
+WHERE s.wait_class != 'Idle'
+ORDER BY rj.job_name, s.wait_time_micro DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 6. TOP WAIT EVENTS FOR SCHEDULER JOBS (From ASH - Last 24 Hours)
+PROMPT ================================================================
+
+SELECT 
+    job_name,
+    event,
+    wait_class,
+    COUNT(*) as sample_count,
+    ROUND(COUNT(*) * 10 / 1000, 2) as estimated_seconds,
+    ROUND(AVG(time_waited)/1000, 2) as avg_wait_ms,
+    ROUND(MAX(time_waited)/1000, 2) as max_wait_ms
+FROM (
+    SELECT 
+        rj.job_name,
+        ash.event,
+        ash.wait_class,
+        ash.time_waited
+    FROM v$active_session_history ash
+    JOIN dba_scheduler_running_jobs rj ON ash.session_id = rj.session_id
+    WHERE ash.sample_time >= SYSDATE - 1  -- Last 24 hours
+        AND ash.wait_class IS NOT NULL
+        AND ash.wait_class != 'Idle'
+    UNION ALL
+    SELECT 
+        j.job_name,
+        ash.event,
+        ash.wait_class,
+        ash.time_waited
+    FROM v$active_session_history ash
+    JOIN v$session s ON ash.session_id = s.sid
+    JOIN dba_scheduler_jobs j ON s.client_info LIKE '%' || j.job_name || '%'
+    WHERE ash.sample_time >= SYSDATE - 1
+        AND ash.wait_class IS NOT NULL
+        AND ash.wait_class != 'Idle'
+        AND s.program LIKE '%Job%'
+)
+GROUP BY job_name, event, wait_class
+HAVING COUNT(*) > 5  -- Only show events with more than 5 samples
+ORDER BY job_name, sample_count DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 7. JOB SCHEDULES AND FREQUENCY PATTERNS
+PROMPT ================================================================
+
+SELECT 
+    j.job_name,
+    j.schedule_name,
+    s.schedule_type,
+    s.repeat_interval,
+    s.start_date,
+    s.end_date,
+    j.next_run_date,
+    j.run_count,
+    j.failure_count
+FROM dba_scheduler_jobs j
+LEFT JOIN dba_scheduler_schedules s ON j.schedule_name = s.schedule_name
+ORDER BY j.job_name;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 8. JOB RESOURCE USAGE AND PERFORMANCE METRICS
+PROMPT ================================================================
+
+SELECT 
+    job_name,
+    COUNT(*) as total_runs,
+    COUNT(CASE WHEN status = 'SUCCEEDED' THEN 1 END) as successful_runs,
+    COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed_runs,
+    ROUND(AVG(cpu_used), 2) as avg_cpu_used,
+    ROUND(MAX(cpu_used), 2) as max_cpu_used
+FROM dba_scheduler_job_run_details
+WHERE log_date >= SYSDATE - 30  -- Last 30 days
+GROUP BY job_name
+ORDER BY job_name;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 9. JOB DEPENDENCIES AND CHAINS
+PROMPT ================================================================
+
+-- Job Chains
+SELECT 
+    chain_name,
+    rule_set_name,
+    evaluation_interval
+FROM dba_scheduler_chains
+ORDER BY chain_name;
+
+-- Chain Steps
+SELECT 
+    chain_name,
+    step_name,
+    job_name,
+    job_subname,
+    step_type,
+    restart_on_recovery,
+    skip,
+    pause
+FROM dba_scheduler_chain_steps
+ORDER BY chain_name, step_name;
+
+-- Chain Rules
+SELECT 
+    chain_name,
+    rule_name,
+    condition,
+    action
+FROM dba_scheduler_chain_rules
+ORDER BY chain_name, rule_name;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 10. LONG RUNNING JOBS (Current Session Wait Analysis)
+PROMPT ================================================================
+
+SELECT 
+    rj.job_name,
+    s.sid,
+    s.serial#,
+    s.logon_time,
+    ROUND((SYSDATE - s.logon_time) * 24 * 60, 2) as runtime_minutes,
+    s.status,
+    s.event,
+    s.wait_class,
+    s.seconds_in_wait,
+    s.blocking_session,
+    sw.p1text,
+    sw.p1,
+    sw.p2text,
+    sw.p2
+FROM dba_scheduler_running_jobs rj
+JOIN v$session s ON rj.session_id = s.sid
+LEFT JOIN v$session_wait sw ON s.sid = sw.sid
+WHERE (SYSDATE - s.logon_time) * 24 * 60 > 5  -- Running more than 5 minutes
+ORDER BY runtime_minutes DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 11. JOB ERROR SUMMARY (Last 30 Days)
+PROMPT ================================================================
+
+SELECT 
+    job_name,
+    error#,
+    COUNT(*) as error_count,
+    MAX(log_date) as last_occurrence,
+    SUBSTR(MAX(additional_info), 1, 100) as sample_error_message
+FROM dba_scheduler_job_run_details
+WHERE status = 'FAILED'
+    AND log_date >= SYSDATE - 30
+GROUP BY job_name, error#
+ORDER BY error_count DESC, job_name;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 12. SCHEDULER JOB CLASSES AND RESOURCE ALLOCATION
+PROMPT ================================================================
+
+SELECT 
+    job_class_name,
+    resource_consumer_group,
+    service,
+    logging_level,
+    log_history
+FROM dba_scheduler_job_classes
+ORDER BY job_class_name;
+
+PROMPT
+PROMPT ================================================================
+PROMPT 13. JOBS BY STATE SUMMARY
+PROMPT ================================================================
+
+SELECT 
+    state,
+    COUNT(*) as job_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) as percentage
+FROM dba_scheduler_jobs
+GROUP BY state
+ORDER BY job_count DESC;
+
+PROMPT
+PROMPT ================================================================
+PROMPT Analysis Complete
+PROMPT ================================================================
+
+-- Reset formatting
+SET PAGESIZE 14
+SET LINESIZE 80
