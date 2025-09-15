@@ -60,3 +60,82 @@ SELECT
     segment_space_management
 FROM dba_tablespaces
 WHERE tablespace_name = UPPER('&tablespace_name');
+
+
+
+SET SERVEROUTPUT ON;
+SET LINESIZE 200;
+SET PAGESIZE 50;
+
+ACCEPT tablespace_name PROMPT 'Enter Tablespace Name: ';
+
+-- Display current tablespace size and usage
+COLUMN tablespace_name FORMAT A30;
+COLUMN total_size_mb FORMAT 999,999,999.99;
+COLUMN used_size_mb FORMAT 999,999,999.99;
+COLUMN free_size_mb FORMAT 999,999,999.99;
+COLUMN pct_used FORMAT 999.99;
+
+SELECT 
+    ts.tablespace_name,
+    ROUND(ts.total_size / 1024 / 1024, 2) AS total_size_mb,
+    ROUND((ts.total_size - NVL(fs.free_space, 0)) / 1024 / 1024, 2) AS used_size_mb,
+    ROUND(NVL(fs.free_space, 0) / 1024 / 1024, 2) AS free_size_mb,
+    ROUND((NVL((ts.total_size - NVL(fs.free_space, 0)) / ts.total_size, 0)) * 100, 2) AS pct_used
+FROM (
+    SELECT tablespace_name, SUM(bytes) AS total_size
+    FROM dba_data_files
+    WHERE tablespace_name = UPPER('&tablespace_name')
+    GROUP BY tablespace_name
+) ts
+LEFT JOIN (
+    SELECT tablespace_name, SUM(bytes) AS free_space
+    FROM dba_free_space
+    WHERE tablespace_name = UPPER('&tablespace_name')
+    GROUP BY tablespace_name
+) fs
+ON ts.tablespace_name = fs.tablespace_name
+WHERE ts.tablespace_name IS NOT NULL;
+
+-- Optional: Check for historical growth if TABLESPACE_GROWTH_HIST exists
+DECLARE
+    v_ts_name VARCHAR2(30) := UPPER('&tablespace_name');
+    v_table_exists NUMBER := 0;
+BEGIN
+    -- Check if TABLESPACE_GROWTH_HIST exists
+    SELECT COUNT(*)
+    INTO v_table_exists
+    FROM user_tables
+    WHERE table_name = 'TABLESPACE_GROWTH_HIST';
+
+    IF v_table_exists > 0 THEN
+        DBMS_OUTPUT.PUT_LINE('Historical Growth for Tablespace: ' || v_ts_name);
+        DBMS_OUTPUT.PUT_LINE('---------------------------------------------');
+        FOR rec IN (
+            SELECT check_date, size_mb
+            FROM TABLESPACE_GROWTH_HIST
+            WHERE tablespace_name = v_ts_name
+            ORDER BY check_date DESC
+        ) LOOP
+            DBMS_OUTPUT.PUT_LINE('Date: ' || TO_CHAR(rec.check_date, 'YYYY-MM-DD HH24:MI:SS') || ' | Size (MB): ' || TO_CHAR(rec.size_mb));
+        END LOOP;
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('Note: TABLESPACE_GROWTH_HIST table does not exist. Skipping historical growth data.');
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error retrieving historical growth: ' || SQLERRM);
+END;
+/
+
+-- Display tablespace attributes
+SELECT 
+    tablespace_name,
+    status,
+    contents,
+    logging,
+    extent_management,
+    allocation_type,
+    segment_space_management
+FROM dba_tablespaces
+WHERE tablespace_name = UPPER('&tablespace_name');
