@@ -1,0 +1,85 @@
+-- Redo Log Analysis Script
+-- This script provides redo log generation per hour per day, log switches per hour per day,
+-- and recommendations for redo log sizing based on exact peak hourly generation.
+-- Run in SQL*Plus via PuTTY for readable output.
+
+-- Formatting settings for readable output in SQL*Plus
+SET LINESIZE 200
+SET PAGESIZE 50
+SET PAGING ON
+SET TIMING OFF
+SET FEEDBACK ON
+SET VERIFY OFF
+SET HEADING ON
+SET COLSEP '|'
+SET TRIMSPOOL ON
+
+PROMPT ================================================
+PROMPT Redo Log Generation Per Hour Per Day (MB)
+PROMPT ================================================
+
+COLUMN "Day" FORMAT A12
+COLUMN "Hour" FORMAT A6
+COLUMN "Redo Generated (MB)" FORMAT 999999.99
+
+SELECT 
+    TO_CHAR(FIRST_TIME, 'YYYY-MM-DD') AS "Day",
+    TO_CHAR(FIRST_TIME, 'HH24') AS "Hour",
+    ROUND(SUM(BLOCKS * BLOCK_SIZE) / 1024 / 1024, 2) AS "Redo Generated (MB)"
+FROM V$ARCHIVED_LOG
+WHERE FIRST_TIME >= SYSDATE - 30  -- Last 30 days; adjust as needed
+GROUP BY TO_CHAR(FIRST_TIME, 'YYYY-MM-DD'), TO_CHAR(FIRST_TIME, 'HH24')
+ORDER BY "Day", "Hour";
+
+PROMPT ================================================
+PROMPT Peak Redo Generation Per Hour (MB) - Used for Recommendations
+PROMPT ================================================
+
+COLUMN "Peak Redo Per Hour (MB)" FORMAT 999999.99
+
+SELECT 
+    MAX(ROUND(SUM(BLOCKS * BLOCK_SIZE) / 1024 / 1024, 2)) AS "Peak Redo Per Hour (MB)"
+FROM V$ARCHIVED_LOG
+WHERE FIRST_TIME >= SYSDATE - 30  -- Last 30 days; adjust as needed
+GROUP BY TO_CHAR(FIRST_TIME, 'YYYY-MM-DD'), TO_CHAR(FIRST_TIME, 'HH24');
+
+PROMPT ================================================
+PROMPT Log Switches Per Hour Per Day
+PROMPT ================================================
+
+COLUMN "Day" FORMAT A12
+COLUMN "Hour" FORMAT A6
+COLUMN "Switches" FORMAT 999
+
+SELECT 
+    TO_CHAR(FIRST_TIME, 'YYYY-MM-DD') AS "Day",
+    TO_CHAR(FIRST_TIME, 'HH24') AS "Hour",
+    COUNT(*) AS "Switches"
+FROM V$LOG_HISTORY
+WHERE FIRST_TIME >= SYSDATE - 30  -- Last 30 days; adjust as needed
+GROUP BY TO_CHAR(FIRST_TIME, 'YYYY-MM-DD'), TO_CHAR(FIRST_TIME, 'HH24')
+ORDER BY "Day", "Hour";
+
+PROMPT ================================================
+PROMPT Current and Recommended Redo Log Size (MB)
+PROMPT ================================================
+
+COLUMN "Current Redo Size (MB)" FORMAT 999999.99
+COLUMN "Recommended Size for 15min (MB)" FORMAT 999999.99
+COLUMN "Recommended Size for 30min (MB)" FORMAT 999999.99
+
+WITH peak_redo AS (
+    SELECT MAX(ROUND(SUM(BLOCKS * BLOCK_SIZE) / 1024 / 1024, 2)) AS peak_mb
+    FROM V$ARCHIVED_LOG
+    WHERE FIRST_TIME >= SYSDATE - 30  -- Last 30 days; adjust as needed
+    GROUP BY TO_CHAR(FIRST_TIME, 'YYYY-MM-DD'), TO_CHAR(FIRST_TIME, 'HH24')
+)
+SELECT 
+    (SELECT ROUND(AVG(BYTES)/1024/1024, 2) FROM V$LOG) AS "Current Redo Size (MB)",
+    ROUND(PR.peak_mb / 4, 2) AS "Recommended Size for 15min (MB)",
+    ROUND(PR.peak_mb / 2, 2) AS "Recommended Size for 30min (MB)"
+FROM peak_redo PR;
+
+PROMPT ================================================
+PROMPT End of Script
+PROMPT ================================================
