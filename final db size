@@ -1,0 +1,288 @@
+#!/bin/bash
+
+# Oracle Database Size Checker Script
+# Discovers Oracle databases from running pmon processes and checks PDB sizes
+
+# Color codes for output formatting
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored output
+print_header() {
+    echo -e "${BLUE}================================================================${NC}" >&2
+    echo -e "${BLUE}           Oracle Database Size Checker${NC}" >&2
+    echo -e "${BLUE}================================================================${NC}" >&2
+}
+
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1" >&2
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1" >&2
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+# Function to discover Oracle databases from pmon processes
+discover_databases() {
+    # Get pmon processes and extract database names 
+    # Format: ora_pmon_C03M10FM_1 -> extract C03M10FM_1, strip RAC suffix (_1), then convert to lowercase
+    databases=$(ps -ef | grep pmon | grep -v grep | grep -iEv 'asm|apx|mgmtdb' | grep -o 'ora_pmon_[^[:space:]]*' | sed 's/ora_pmon_//' | sed 's/_[0-9]*$//' | tr '[:upper:]' '[:lower:]' | grep -v '^$' | grep -v '^//' | sort -u)
+    
+    if [ -z "$databases" ]; then
+        exit 1
+    fi
+    
+    echo "$databases"
+}
+
+# Function to source Oracle environment with fallbacks
+source_oracle_env() {
+    local db_name=$1
+    
+    # Try lowercase first (as extracted from pmon)
+    if . "$db_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Try uppercase as fallback
+    local db_name_upper=$(echo "$db_name" | tr '[:lower:]' '[:upper:]')
+    if . "$db_name_upper" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Both failed
+    return 1
+}
+
+# Function to check if database is CDB (separate lightweight query)
+check_if_cdb() {
+    local temp_sql=$(mktemp --suffix=.sql)
+    chmod 600 "$temp_sql"
+    
+    cat > $temp_sql << 'EOF'
+SET PAGESIZE 0
+SET FEEDBACK OFF
+SET VERIFY OFF
+SET HEADING OFF
+SET ECHO OFF
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+
+SELECT CASE WHEN cdb = 'YES' THEN 'CDB' ELSE 'NON_CDB' END FROM v$database;
+
+EXIT;
+EOF
+
+    local cdb_check=$(sqlplus -L -s / as sysdba @$temp_sql 2>/dev/null)
+    local sql_exit_code=$?
+    rm -f $temp_sql
+    
+    if [ $sql_exit_code -eq 0 ] && [ -n "$cdb_check" ]; then
+        echo "$cdb_check" | grep -E "CDB|NON_CDB" | head -1
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to get PDB information for CDB (only called if confirmed CDB)
+get_cdb_pdb_info() {
+    local temp_sql=$(mktemp --suffix=.sql)
+    chmod 600 "$temp_sql"
+    
+    cat > $temp_sql << 'EOF'
+SET PAGESIZE 0
+SET FEEDBACK OFF
+SET VERIFY OFF
+SET HEADING OFF
+SET ECHO OFF
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+
+SELECT 'PDB_INFO|' || con_id || '|' || name || '|' || open_mode 
+FROM v$pdbs 
+WHERE name != 'PDB$SEED' 
+ORDER BY name;
+
+EXIT;
+EOF
+
+    local pdb_info=$(sqlplus -L -s / as sysdba @$temp_sql 2>/dev/null)
+    local sql_exit_code=$?
+    rm -f $temp_sql
+    
+    if [ $sql_exit_code -eq 0 ]; then
+        echo "$pdb_info"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to get PDB information and sizes for a database
+get_pdb_sizes() {
+    local db_name=$1
+    
+    # Skip empty database names
+    if [ -z "$db_name" ]; then
+        return 1
+    fi
+    
+    # Source the Oracle environment with fallbacks
+    if ! source_oracle_env "$db_name"; then
+        printf "%-20s %-15s %-15s %-15s %-15s\n" "$db_name" "ERROR" "Cannot connect" "-" "-"
+        return 1
+    fi
+    
+    # Step 1: Check if database is CDB with lightweight query
+    local is_cdb=$(check_if_cdb)
+    if [ $? -ne 0 ]; then
+        printf "%-20s %-15s %-15s %-15s %-15s\n" "$db_name" "ERROR" "Connection failed" "-" "-"
+        return 1
+    fi
+    
+    # Step 2: Process based on CDB status
+    if [ "$is_cdb" = "NON_CDB" ]; then
+        get_non_cdb_size $db_name
+    elif [ "$is_cdb" = "CDB" ]; then
+        # Step 3: Get PDB information (safe now that we know it's a CDB)
+        local pdb_info=$(get_cdb_pdb_info)
+        if [ $? -ne 0 ]; then
+            printf "%-20s %-15s %-15s %-15s %-15s\n" "$db_name" "CDB" "ERROR" "Cannot get PDBs" "-"
+            return 1
+        fi
+        
+        # Process each PDB
+        echo "$pdb_info" | grep "PDB_INFO" | while IFS='|' read -r prefix con_id pdb_name open_mode; do
+            # Determine status for display
+            local display_status
+            if [ "$open_mode" = "READ WRITE" ] || [ "$open_mode" = "READ ONLY" ]; then
+                display_status="OPEN"
+            elif [ "$open_mode" = "MOUNTED" ]; then
+                display_status="MOUNTED"
+            else
+                display_status="CLOSED"
+            fi
+            
+            printf "%-20s %-15s %-15s" "$pdb_name" "PDB" "$display_status"
+            
+            if [ "$open_mode" = "READ WRITE" ] || [ "$open_mode" = "READ ONLY" ]; then
+                get_pdb_size $pdb_name
+            elif [ "$open_mode" = "MOUNTED" ]; then
+                printf " %-15s %-15s\n" "PDB is mounted" "-"
+            else
+                printf " %-15s %-15s\n" "PDB is down" "-"
+            fi
+        done
+    else
+        printf "%-20s %-15s %-15s %-15s %-15s\n" "$db_name" "ERROR" "Unknown type" "-" "-"
+        return 1
+    fi
+}
+
+# Function to get size for non-CDB database
+get_non_cdb_size() {
+    local db_name=$1
+    
+    local temp_sql=$(mktemp --suffix=.sql)
+    chmod 600 "$temp_sql"
+    
+    cat > $temp_sql << 'EOF'
+SET PAGESIZE 0
+SET FEEDBACK OFF
+SET VERIFY OFF
+SET HEADING OFF
+SET ECHO OFF
+SET LINESIZE 200
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+
+SELECT 
+    ROUND(SUM(bytes)/1024/1024/1024, 2) || ' GB|' ||
+    ROUND(SUM(CASE WHEN autoextensible = 'YES' THEN maxbytes ELSE bytes END)/1024/1024/1024, 2) || ' GB'
+FROM dba_data_files;
+
+EXIT;
+EOF
+
+    local size_info=$(sqlplus -L -s / as sysdba @$temp_sql 2>/dev/null)
+    local sql_exit_code=$?
+    rm -f $temp_sql
+    
+    if [ $sql_exit_code -eq 0 ] && [ -n "$size_info" ]; then
+        local total_size max_size
+        IFS='|' read total_size max_size <<< "$size_info"
+        printf "%-20s %-15s %-15s %-15s %-15s\n" "$db_name" "NON-CDB" "OPEN" "$total_size" "$max_size"
+    else
+        printf "%-20s %-15s %-15s %-15s %-15s\n" "$db_name" "NON-CDB" "OPEN" "Error getting size" "-"
+    fi
+}
+
+# Function to get PDB size using ALTER SESSION SET CONTAINER as shown by user
+get_pdb_size() {
+    local pdb_name=$1
+    
+    local temp_sql=$(mktemp --suffix=.sql)
+    chmod 600 "$temp_sql"
+    
+    cat > $temp_sql << EOF
+SET PAGESIZE 0
+SET FEEDBACK OFF
+SET VERIFY OFF
+SET HEADING OFF
+SET ECHO OFF
+SET LINESIZE 200
+WHENEVER SQLERROR EXIT SQL.SQLCODE
+
+ALTER SESSION SET CONTAINER = "$pdb_name";
+
+SELECT 
+    ROUND(SUM(bytes)/1024/1024/1024, 2) || ' GB|' ||
+    ROUND(SUM(CASE WHEN autoextensible = 'YES' THEN maxbytes ELSE bytes END)/1024/1024/1024, 2) || ' GB'
+FROM dba_data_files;
+
+EXIT;
+EOF
+
+    local size_info=$(sqlplus -L -s / as sysdba @$temp_sql 2>/dev/null)
+    local sql_exit_code=$?
+    rm -f $temp_sql
+    
+    if [ $sql_exit_code -eq 0 ] && [ -n "$size_info" ]; then
+        local total_size max_size
+        IFS='|' read total_size max_size <<< "$size_info"
+        printf " %-15s %-15s\n" "$total_size" "$max_size"
+    else
+        printf " %-15s %-15s\n" "Error getting size" "-"
+    fi
+}
+
+# Main execution
+main() {
+    # Discover databases
+    databases=$(discover_databases)
+    
+    if [ -z "$databases" ]; then
+        exit 1
+    fi
+    
+    # Print table header
+    printf "%-20s %-15s %-15s %-15s %-15s\n" "DATABASE/PDB" "TYPE" "STATUS" "CURRENT SIZE" "MAX SIZE"
+    printf "%-20s %-15s %-15s %-15s %-15s\n" "----------------" "-------------" "-------------" "-------------" "-------------"
+    
+    # Process each database
+    for db in $databases; do
+        get_pdb_sizes $db
+    done
+}
+
+# Execute main function
+main "$@"the 
