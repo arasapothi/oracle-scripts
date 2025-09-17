@@ -1,0 +1,15 @@
+SELECT 
+    ROUND(SUM(bytes)/1024/1024/1024, 2) AS total_size_gb
+FROM (
+    -- Data files
+    SELECT SUM(bytes) AS bytes
+    FROM dba_data_files
+    UNION ALL
+    -- Temp files
+    SELECT SUM(bytes) AS bytes
+    FROM dba_temp_files
+    UNION ALL
+    -- Redo logs
+    SELECT SUM(bytes) AS bytes
+    FROM v$log
+);
