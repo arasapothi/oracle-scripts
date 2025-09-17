@@ -19,3 +19,11 @@ FROM (
 SELECT 
     ROUND(SUM(bytes)/1024/1024/1024, 2) AS used_size_gb
 FROM dba_segments;
+
+
+SELECT 
+    tablespace_name,
+    ROUND(SUM(bytes)/1024/1024/1024, 2) AS used_size_gb
+FROM dba_segments
+GROUP BY tablespace_name
+ORDER BY used_size_gb DESC;
