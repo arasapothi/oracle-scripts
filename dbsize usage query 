@@ -13,3 +13,9 @@ FROM (
     SELECT SUM(bytes) AS bytes
     FROM v$log
 );
+
+
+
+SELECT 
+    ROUND(SUM(bytes)/1024/1024/1024, 2) AS used_size_gb
+FROM dba_segments;
