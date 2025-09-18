@@ -34,5 +34,51 @@ WHERE
 ORDER BY 
     s.logon_time DESC;
 
+
+
+
+-- Set SQL*Plus environment for readable output
+SET LINESIZE 150
+SET PAGESIZE 50
+COLUMN sid FORMAT 9999
+COLUMN serial# FORMAT 999999
+COLUMN user_id FORMAT 99999
+COLUMN username FORMAT A15
+COLUMN machine FORMAT A20
+COLUMN program FORMAT A20
+COLUMN sql_id FORMAT A13
+COLUMN sql_text FORMAT A50
+COLUMN sample_time FORMAT A20
+
+-- Query to list historical SQL statements executed from a specific machine
+SELECT 
+    ash.session_id AS sid,
+    ash.session_serial# AS serial#,
+    ash.user_id,
+    u.username,
+    ash.machine,
+    ash.program,
+    ash.sql_id,
+    q.sql_text,
+    TO_CHAR(ash.sample_time, 'YYYY-MM-DD HH24:MI:SS') AS sample_time
+FROM 
+    v$active_session_history ash
+JOIN 
+    v$sql q
+ON 
+    ash.sql_id = q.sql_id
+JOIN 
+    dba_users u
+ON 
+    ash.user_id = u.user_id
+WHERE 
+    ash.machine = 'YOUR_MACHINE_NAME'
+    AND ash.sql_id IS NOT NULL
+ORDER BY 
+    ash.sample_time DESC;
+
+-- Reset column formats (optional, to avoid affecting subsequent queries)
+CLEAR COLUMNS
+
 -- Reset column formats (optional, to avoid affecting subsequent queries)
 CLEAR COLUMNS
