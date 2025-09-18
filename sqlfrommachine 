@@ -1,0 +1,38 @@
+-- Set SQL*Plus environment for readable output
+SET LINESIZE 150
+SET PAGESIZE 50
+COLUMN sid FORMAT 9999
+COLUMN serial# FORMAT 999999
+COLUMN username FORMAT A15
+COLUMN machine FORMAT A20
+COLUMN program FORMAT A20
+COLUMN sql_id FORMAT A13
+COLUMN sql_text FORMAT A50
+COLUMN logon_time FORMAT A20
+COLUMN status FORMAT A10
+
+-- Query to list SQL statements executed from a specific machine
+SELECT 
+    s.sid,
+    s.serial#,
+    s.username,
+    s.machine,
+    s.program,
+    s.sql_id,
+    q.sql_text,
+    TO_CHAR(s.logon_time, 'YYYY-MM-DD HH24:MI:SS') AS logon_time,
+    s.status
+FROM 
+    v$session s
+JOIN 
+    v$sql q
+ON 
+    s.sql_id = q.sql_id
+WHERE 
+    s.machine = 'YOUR_MACHINE_NAME'
+    AND s.sql_id IS NOT NULL
+ORDER BY 
+    s.logon_time DESC;
+
+-- Reset column formats (optional, to avoid affecting subsequent queries)
+CLEAR COLUMNS
