@@ -1,0 +1,28 @@
+-- Set output formatting
+SET LINESIZE 120
+SET PAGESIZE 50
+COLUMN username FORMAT A20
+COLUMN os_username FORMAT A20
+COLUMN userhost FORMAT A30
+COLUMN terminal FORMAT A15
+COLUMN login_time FORMAT A20
+COLUMN action_name FORMAT A15
+COLUMN returncode FORMAT 99999
+
+-- Query for failed login attempts with ORA-28000
+SELECT 
+    username,
+    os_username,
+    userhost,
+    terminal,
+    TO_CHAR(timestamp, 'YYYY-MM-DD HH24:MI:SS') AS login_time,
+    returncode,
+    action_name
+FROM 
+    dba_audit_trail
+WHERE 
+    action_name = 'LOGON'
+    AND returncode = 28000  -- Filter for ORA-28000 (account locked)
+    AND timestamp > SYSDATE - 7  -- Last 7 days, adjust as needed
+ORDER BY 
+    timestamp DESC;
